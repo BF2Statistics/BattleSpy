@@ -112,7 +112,7 @@ namespace Server.Database
         /// <returns>Returns the Player ID if sucessful, 0 otherwise</returns>
         public int CreateUser(string Nick, string Pass, string Email, string Country)
         {
-            string Sql = "INSERT INTO player(`name`, `password`, `email`, `country`, `rank`) VALUES(@P0, @P1, @P2, @P3, 0)";
+            string Sql = "INSERT INTO player(`name`, `password`, `email`, `country`, `rank_id`) VALUES(@P0, @P1, @P2, @P3, 0)";
             using (MySqlCommand Command = (MySqlCommand)this.CreateCommand(Sql))
             {
                 DbParameter Param = base.CreateParam();
