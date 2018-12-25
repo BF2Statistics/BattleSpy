@@ -69,6 +69,7 @@
     <Compile Include="Database\GeoIP.cs" />
     <Compile Include="Database\MasterDatabase.cs" />
     <Compile Include="Gamespy\Master\CDKeyServer.cs" />
+    <Compile Include="Gamespy\Master\FilterWordTypes.cs" />
     <Compile Include="Gamespy\Master\GameServer.cs" />
     <Compile Include="Gamespy\Master\MasterClient.cs" />
     <Compile Include="Gamespy\Master\MasterServer.cs" />

@@ -26,12 +26,30 @@ namespace BattlelogMaster
         /// <summary>
         /// The clients socket network stream
         /// </summary>
-        public GamespyTcpStream Stream { get; protected set; }
+        public GamespyTcpStream Stream { get; protected set; }        
 
         /// <summary>
         /// Event fired when the connection is closed
         /// </summary>
         public static event MstrConnectionClosed OnDisconnect;
+
+        /// <summary>
+        /// Contains a list of filterable properties
+        /// </summary>
+        protected static List<string> FilterableProperties { get; set; } = new List<string>();
+
+        static MasterClient()
+        {
+            // get all the properties that aren't "[NonFilter]"
+            PropertyInfo[] properties = typeof(GameServer).GetProperties();
+            foreach (var property in properties)
+            {
+                if (property.GetCustomAttributes(false).Any(x => x.GetType().Name == "NonFilterAttribute"))
+                    continue;
+
+                FilterableProperties.Add(property.Name);
+            }
+        }
 
         /// <summary>
         /// Constructor
@@ -89,8 +107,7 @@ namespace BattlelogMaster
                 Stream.Close(DisposeEventArgs);
 
             // Call disconnect event
-            if (OnDisconnect != null)
-                OnDisconnect(this);
+            OnDisconnect?.Invoke(this);
         }
 
         /// <summary>
@@ -103,11 +120,18 @@ namespace BattlelogMaster
 
             string gamename = data[1].ToLowerInvariant();
             string validate = data[2].Substring(0, 8);
-            string filter = FixFilter(data[2].Substring(8));
+            string filter = data[2].Substring(8);
             string[] fields = data[3].Split(new char[] { '\\' }, StringSplitOptions.RemoveEmptyEntries);
 
+            // Fix filter because the filter from BF2 can be messed up, missing spaces and such
+            string fixedFilter = FixFilter(filter);
+            if (String.IsNullOrEmpty(fixedFilter))
+            {
+                fixedFilter = "";
+            }
+
             // Send the encrypted serverlist to the client
-            byte[] unencryptedServerList = PackServerList(filter, fields);
+            byte[] unencryptedServerList = PackServerList(fixedFilter, fields);
             Stream.SendAsync(
                 Enctypex.Encode(
                     Encoding.UTF8.GetBytes("hW6m9a"), // Battlfield 2 Handoff Key
@@ -147,7 +171,7 @@ namespace BattlelogMaster
             }
 
             // Execute query right here in memory
-            IQueryable<GameServer> servers = MasterServer.Servers.ToList().Select(x => x.Value).Where(x => x.IsValidated).AsQueryable();
+            IQueryable<GameServer> servers = MasterServer.Servers.Select(x => x.Value).Where(x => x.IsValidated).AsQueryable();
             if (!String.IsNullOrWhiteSpace(filter))
             {
                 try
@@ -157,7 +181,7 @@ namespace BattlelogMaster
                 }
                 catch (Exception e)
                 {
-                    Program.ErrorLog.Write("ERROR: [PackServerList] " + e.Message);
+                    Program.ErrorLog.Write("ERROR: [MasterClient.PackServerList] " + e.Message);
                     Program.ErrorLog.Write(" - Filter Used: " + filter);
                 }
             }
@@ -197,7 +221,7 @@ namespace BattlelogMaster
         /// <returns></returns>
         private static string GetField(GameServer server, string fieldName)
         {
-            object value = server.GetType().GetProperty(fieldName).GetValue(server, null);
+            object value = typeof(GameServer).GetProperty(fieldName).GetValue(server, null);
             if (value == null)
                 return String.Empty;
             else if (value is Boolean)
@@ -226,245 +250,205 @@ namespace BattlelogMaster
             return "";
         }
 
-        private string FixFilter(string filter)
+
+        /// <summary>
+        /// Credits to gavrant @ Github
+        /// </summary>
+        /// <seealso cref="https://github.com/realitymod/PRMasterServer/pull/4/commits/ac6d7c86657e37313b5557675a8d6d9b30775e6f"/>
+        /// <param name="filter"></param>
+        /// <returns></returns>
+        private static string FixFilter(string filter)
         {
             // escape [
             filter = filter.Replace("[", "[[]");
-            try
+
+            StringBuilder filterBuilder = new StringBuilder();
+            int len = filter.Length;
+            var prevWordTrueType = FilterWordTypes.None;
+            var curWordType = FilterWordTypes.None;
+            int curWordStart = 0;
+            int endOfString = -1;
+            for (int i = 0; i < len; i++)
             {
+                FilterWordTypes newWordType;
+                if (i <= endOfString)
+                {
+                    newWordType = FilterWordTypes.String;
+                }
+                else
+                {
+                    char ch = filter[i];
+                    if (ch == '\'' || ch == '"')
+                    {
+                        newWordType = FilterWordTypes.String;
+
+                        // Search for the trailing quote
+                        // This is a nightmare, since they forgot to escape filter strings in the BF2 client, so you can easily get something like that:
+                        //	  hostname like 'flyin' high'
+                        int quotes = filter.Substring(i + 1).Count(x => x == ch);
+                        if (quotes == 0)
+                            endOfString = len - 1; // No trailing quote
+                        else if (quotes == 1)
+                            endOfString = filter.IndexOf(ch, i + 1);
+                        else // quotes > 1
+                        {
+                            endOfString = i;
+                            bool doPercentCheck = (filter[i + 1] == '%');
+                            for (int j = 1; j <= quotes; j++)
+                            {
+                                endOfString = filter.IndexOf(ch, endOfString + 1);
+                                if (j == quotes) // Last quote?
+                                    break;
+
+                                if (doPercentCheck)
+                                {
+                                    if (endOfString <= (i + 2))
+                                        continue;
+                                    if (filter[endOfString - 1] != '%')
+                                        continue;
+                                }
+
+                                string trailStr = filter.Substring(endOfString + 1).TrimStart();
+                                bool isTerminated = (trailStr.StartsWith(")")
+                                                        || trailStr.StartsWith("(")
+                                                        || trailStr.StartsWith("and ", StringComparison.InvariantCultureIgnoreCase)
+                                                        || trailStr.StartsWith("or ", StringComparison.InvariantCultureIgnoreCase));
+                                if (isTerminated == false)
+                                {
+                                    foreach (var property in FilterableProperties)
+                                    {
+                                        if (trailStr.StartsWith(property))
+                                        {
+                                            isTerminated = true;
+                                            break;
+                                        }
+                                    }
+                                }
+
+                                if (isTerminated)
+                                    break;
+                            }
+                        }
+                    }
+                    else if (ch <= ' ')
+                        newWordType = FilterWordTypes.None; // Skip whitespaces
+                    else if (ch == '(')
+                        newWordType = FilterWordTypes.OpenBracket;
+                    else if (ch == ')')
+                        newWordType = FilterWordTypes.CloseBracket;
+                    else if (ch == '=' || ch == '!' || ch == '<' || ch == '>')
+                        newWordType = FilterWordTypes.Comparison;
+                    //else if (ch == '&' || ch == '|') // No idea how these C logical operators can get into a BF2 filter, but they were in the original...
+                    //	newWordType = FilterWordTypes.Logical;
+                    else
+                        newWordType = FilterWordTypes.Other;
+                }
+
+                if (newWordType != curWordType || newWordType == FilterWordTypes.OpenBracket || newWordType == FilterWordTypes.CloseBracket)
+                {
+                    if (curWordType != FilterWordTypes.None)
+                    {
+                        prevWordTrueType = AddFilterWord(filterBuilder, filter, curWordStart, i, curWordType, prevWordTrueType, FilterableProperties);
+                    }
+
+                    curWordType = newWordType;
+                    curWordStart = i;
+                }
+            }
+
+            if (curWordType != FilterWordTypes.None && curWordStart < len)
+            {
+                AddFilterWord(filterBuilder, filter, curWordStart, len, curWordType, prevWordTrueType, FilterableProperties);
+            }
+
+            return filterBuilder.ToString();
+        }
+
+        private static FilterWordTypes AddFilterWord(
+            StringBuilder filterBuilder, 
+            string filter, 
+            int wordStart, 
+            int nextWordStart, 
+            FilterWordTypes wordType, 
+            FilterWordTypes prevWordType, 
+            List<string> filterableProperties)
+        {
+            string word = filter.Substring(wordStart, nextWordStart - wordStart);
+
+            if (wordType == FilterWordTypes.Other)
+            {
+                // Try to fix properties merged with other stuff
+                foreach (var property in filterableProperties)
+                {
+                    int propIndex = word.IndexOf(property);
+                    if (propIndex < 0)
+                        continue;
+
+                    if (propIndex > 0)
+                        prevWordType = AddFilterWord(filterBuilder, word.Substring(0, propIndex), FilterWordTypes.Other, prevWordType);
+
+                    prevWordType = AddFilterWord(filterBuilder, property, FilterWordTypes.Other, prevWordType);
+
+                    int trailIndex = propIndex + property.Length;
+                    if (trailIndex < word.Length)
+                        prevWordType = AddFilterWord(filterBuilder, word.Substring(trailIndex), FilterWordTypes.Other, prevWordType);
+
+                    return prevWordType;
+                }
+            }
+
+            return AddFilterWord(filterBuilder, word, wordType, prevWordType);
+        }
+
+        private static FilterWordTypes AddFilterWord(StringBuilder filterBuilder, string word, FilterWordTypes wordType, FilterWordTypes prevWordType)
+        {
+            if (wordType == FilterWordTypes.Other)
+            {
+                if (word.Equals("and", StringComparison.InvariantCultureIgnoreCase))
+                    wordType = FilterWordTypes.Logical;
+                else if (word.Equals("or", StringComparison.InvariantCultureIgnoreCase))
+                    wordType = FilterWordTypes.Logical;
+                else if (word.Equals("like", StringComparison.InvariantCultureIgnoreCase))
+                    wordType = FilterWordTypes.Comparison;
+                else if (word.Equals("not", StringComparison.InvariantCultureIgnoreCase))
+                    wordType = FilterWordTypes.Comparison;
+            }
+
+            // Not the first word or start/end of a group
+            if (prevWordType != FilterWordTypes.None && prevWordType != FilterWordTypes.OpenBracket && wordType != FilterWordTypes.CloseBracket)
+            {
+                filterBuilder.Append(' ');
+
                 // fix an issue in the BF2 main menu where filter expressions aren't joined properly
                 // i.e. "numplayers > 0gametype like '%gpm_cq%'"
-                // becomes "numplayers > 0 && gametype like '%gpm_cq%'"
-                filter = FixFilterOperators(filter);
-
-                // fix quotes inside quotes
-                // i.e. hostname like 'flyin' high'
-                // becomes hostname like 'flyin_ high'
-                filter = FixFilterQuotes(filter);
-            }
-            catch (Exception)
-            {
-                //LogError(Category, e.ToString());
-            }
-
-            // fix consecutive whitespace
-            return Regex.Replace(filter, @"\s+", " ").Trim();
-        }
-
-        private static string FixFilterOperators(string filter)
-        {
-            PropertyInfo[] properties = typeof(GameServer).GetProperties();
-            List<string> filterableProperties = new List<string>();
-
-            // get all the properties that aren't "[NonFilter]"
-            foreach (var property in properties)
-            {
-                if (property.GetCustomAttributes(false).Any(x => x.GetType().Name == "NonFilterAttribute"))
-                    continue;
-
-                filterableProperties.Add(property.Name);
-            }
-
-            // go through each property, see if they exist in the filter,
-            // and check to see if what's before the property is a logical operator
-            // if it is not, then we slap a && before it
-            foreach (var property in filterableProperties)
-            {
-                IEnumerable<int> indexes = filter.IndexesOf(property);
-                foreach (var index in indexes)
+                // becomes "numplayers > 0 and gametype like '%gpm_cq%'"
+                if (wordType == FilterWordTypes.Other)
                 {
-                    if (index > 0)
-                    {
-                        int length = 0;
-                        bool hasLogical = IsLogical(filter, index, out length, true) || IsOperator(filter, index, out length, true) || IsGroup(filter, index, out length, true);
-                        if (!hasLogical)
-                        {
-                            filter = filter.Insert(index, " && ");
-                        }
-                    }
+                    if (prevWordType != FilterWordTypes.Logical && prevWordType != FilterWordTypes.Comparison)
+                        filterBuilder.Append("and ");
                 }
-            }
-            return filter;
-        }
-
-        private static string FixFilterQuotes(string filter)
-        {
-            StringBuilder newFilter = new StringBuilder(filter);
-
-            for (int i = 0; i < filter.Length; i++)
-            {
-                int length = 0;
-                bool isOperator = IsOperator(filter, i, out length);
-
-                if (isOperator)
+                else if (wordType == FilterWordTypes.OpenBracket)
                 {
-                    i += length;
-                    bool isInsideString = false;
-                    for (; i < filter.Length; i++)
-                    {
-                        if (filter[i] == '\'' || filter[i] == '"')
-                        {
-                            if (isInsideString)
-                            {
-                                // check what's after the quote to see if we terminate the string
-                                if (i >= filter.Length - 1)
-                                {
-                                    // end of string
-                                    isInsideString = false;
-                                    break;
-                                }
-                                for (int j = i + 1; j < filter.Length; j++)
-                                {
-                                    // continue along whitespace
-                                    if (filter[j] == ' ')
-                                    {
-                                        continue;
-                                    }
-                                    else
-                                    {
-                                        // if it's a logical operator, then we terminate
-                                        bool op = IsLogical(filter, j, out length);
-                                        if (op)
-                                        {
-                                            isInsideString = false;
-                                            j += length;
-                                            i = j;
-                                        }
-                                        break;
-                                    }
-                                }
-                                if (isInsideString)
-                                {
-                                    // and if we're still inside the string, replace the quote with a wildcard character
-                                    newFilter[i] = '_';
-                                }
-                                continue;
-                            }
-                            else
-                            {
-                                isInsideString = true;
-                            }
-                        }
-                    }
+                    if (prevWordType == FilterWordTypes.Other || prevWordType == FilterWordTypes.String)
+                        filterBuilder.Append("and ");
                 }
             }
 
-            return newFilter.ToString();
-        }
-
-        private static bool IsOperator(string filter, int i, out int length, bool previous = false)
-        {
-            bool isOperator = false;
-            length = 0;
-
-            if (i < filter.Length - 1)
+            if (wordType == FilterWordTypes.String)
             {
-                string op = filter.Substring(i - (i >= 2 ? (previous ? 2 : 0) : 0), 1);
-                if (op == "=" || op == "<" || op == ">")
+                char quote = word[0];
+                filterBuilder.Append(quote);
+                if (word.Length > 2)
                 {
-                    isOperator = true;
-                    length = 1;
+                    string strContent = word.Substring(1, word.Length - 2);
+                    filterBuilder.Append(strContent.Replace(quote, '_')); // replace quote characters inside the string with a wildcard character
                 }
+                filterBuilder.Append(quote);
             }
+            else
+                filterBuilder.Append(word);
 
-            if (!isOperator)
-            {
-                if (i < filter.Length - 2)
-                {
-                    string op = filter.Substring(i - (i >= 3 ? (previous ? 3 : 0) : 0), 2);
-                    if (op == "==" || op == "!=" || op == "<>" || op == "<=" || op == ">=")
-                    {
-                        isOperator = true;
-                        length = 2;
-                    }
-                }
-            }
-
-            if (!isOperator)
-            {
-                if (i < filter.Length - 4)
-                {
-                    string op = filter.Substring(i - (i >= 5 ? (previous ? 5 : 0) : 0), 4);
-                    if (op.Equals("like", StringComparison.InvariantCultureIgnoreCase))
-                    {
-                        isOperator = true;
-                        length = 4;
-                    }
-                }
-            }
-
-            if (!isOperator)
-            {
-                if (i < filter.Length - 8)
-                {
-                    string op = filter.Substring(i - (i >= 9 ? (previous ? 9 : 0) : 0), 8);
-                    if (op.Equals("not like", StringComparison.InvariantCultureIgnoreCase))
-                    {
-                        isOperator = true;
-                        length = 8;
-                    }
-                }
-            }
-
-            return isOperator;
-        }
-
-        private static bool IsLogical(string filter, int i, out int length, bool previous = false)
-        {
-            bool isLogical = false;
-            length = 0;
-
-            if (i < filter.Length - 2)
-            {
-                string op = filter.Substring(i - (i >= 3 ? (previous ? 3 : 0) : 0), 2);
-                if (op == "&&" || op == "||" || op.Equals("or", StringComparison.InvariantCultureIgnoreCase))
-                {
-                    isLogical = true;
-                    length = 2;
-                }
-            }
-
-            if (!isLogical)
-            {
-                if (i < filter.Length - 3)
-                {
-                    string op = filter.Substring(i - (i >= 4 ? (previous ? 4 : 0) : 0), 3);
-                    if (op.Equals("and", StringComparison.InvariantCultureIgnoreCase))
-                    {
-                        isLogical = true;
-                        length = 3;
-                    }
-                }
-            }
-
-            return isLogical;
-        }
-
-        private static bool IsGroup(string filter, int i, out int length, bool previous = false)
-        {
-            bool isGroup = false;
-            length = 0;
-
-            if (i < filter.Length - 1)
-            {
-                string op = filter.Substring(i - (i >= 2 ? (previous ? 2 : 0) : 0), 1);
-                if (op == "(" || op == ")")
-                {
-                    isGroup = true;
-                    length = 1;
-                }
-                if (!isGroup && previous)
-                {
-                    op = filter.Substring(i - (i >= 1 ? (previous ? 1 : 0) : 0), 1);
-                    if (op == "(") // || op == ")")
-                    {
-                        isGroup = true;
-                        length = 1;
-                    }
-                }
-            }
-
-            return isGroup;
+            return wordType;
         }
     }
 }

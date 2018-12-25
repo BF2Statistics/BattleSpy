@@ -292,6 +292,7 @@ namespace BattlelogMaster
         /// <returns>Returns whether or not the server needs to be validated, so it can be seen in the Server Browser</returns>
         private bool ParseServerDetails(IPEndPoint remote, byte[] data)
         {
+            // Format key
             string key = String.Format("{0}:{1}", remote.Address, remote.Port);
 
             // split by 000 (info/player separator) and 002 (players/teams separator)
@@ -317,11 +318,26 @@ namespace BattlelogMaster
 
             // Start a new Server Object
             GameServer server = new GameServer(remote);
+            List<Dictionary<string, object>> Rows = null;
 
             // set the country based off ip address if its IPv4
             server.country = (remote.Address.AddressFamily == AddressFamily.InterNetwork) 
                 ? GeoIP.GetCountryCode(remote.Address).ToUpperInvariant() 
                 : "??";
+
+            // Try and Fetch server and provider from the database
+            try
+            {
+                using (MasterDatabase Driver = new MasterDatabase())
+                {
+                    string q = "SELECT s.*, p.authorized, p.plasma FROM server AS s JOIN stats_provider AS p ON s.provider_id = p.id WHERE ip=@P0 AND queryport=@P1";
+                    Rows = Driver.Query(q, remote.Address, remote.Port);
+                }
+            }
+            catch (Exception e)
+            {
+                Program.ErrorLog.Write("WARNING: [MasterServer.ParseServerDetails] " + e.Message);
+            }
 
             // Set server vars
             for (int i = 0; i < serverVarsSplit.Length - 1; i += 2)
@@ -329,7 +345,9 @@ namespace BattlelogMaster
                 // Fetch the property
                 PropertyInfo property = typeof(GameServer).GetProperty(serverVarsSplit[i]);
                 if (property == null)
+                {
                     continue;
+                }
                 else if (property.Name == "hostname")
                 {
                     // strip consecutive whitespace from hostname
@@ -337,34 +355,35 @@ namespace BattlelogMaster
                 }
                 else if (property.Name == "bf2_plasma")
                 {
-                    try
+                    // Does the server exist in the database?
+                    if (Rows != null && Rows.Count > 0)
                     {
-                        // Fetch plasma server from the database
-                        using (MasterDatabase Driver = new MasterDatabase())
-                        {
-                            var Rows = Driver.Query("SELECT plasma FROM server WHERE ip=@P0 AND queryport=@P1", remote.Address, remote.Port);
-                            if (Rows.Count > 0)
-                            {
-                                // For some damn reason, the driver is returning a bool instead of an integer?;
-                                if (Rows[0]["plasma"] is bool)
-                                    property.SetValue(server, Rows[0]["plasma"], null);
-                                else
-                                    property.SetValue(server, Int32.Parse(Rows[0]["plasma"].ToString()) > 0, null);
-                            }
-                            else
-                                property.SetValue(server, false, null);
-                        }
+                        // For some damn reason, the driver is returning a bool instead of an integer?
+                        if (Rows[0]["plasma"] is bool)
+                            property.SetValue(server, Rows[0]["plasma"], null);
+                        else
+                            property.SetValue(server, Int32.Parse(Rows[0]["plasma"].ToString()) > 0, null);
                     }
-                    catch (Exception e)
+                    else
                     {
                         property.SetValue(server, false, null);
-                        Program.ErrorLog.Write("WARNING: [ParseServerDetails.bf2_plasma] " + e.Message);
                     }
                 }
                 else if (property.Name == "bf2_ranked")
                 {
-                    // we're always a ranked server (helps for mods with a default bf2 main menu, and default filters wanting ranked servers)
-                    property.SetValue(server, true, null);
+                    // Does the server exist in the database?
+                    if (Rows != null && Rows.Count > 0)
+                    {
+                        // For some damn reason, the driver is returning a bool instead of an integer?
+                        if (Rows[0]["authorized"] is bool)
+                            property.SetValue(server, Rows[0]["authorized"], null);
+                        else
+                            property.SetValue(server, Int32.Parse(Rows[0]["authorized"].ToString()) > 0, null);
+                    }
+                    else
+                    {
+                        property.SetValue(server, false, null);
+                    }
                 }
                 else if (property.Name == "bf2_pure")
                 {

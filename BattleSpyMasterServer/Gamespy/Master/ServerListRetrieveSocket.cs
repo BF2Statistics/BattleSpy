@@ -99,7 +99,7 @@ namespace BattlelogMaster
                 Clients.TryRemove(ConID, out client);
 
                 // Report error
-                Program.ErrorLog.Write("NOTICE: An Error occured at [MstrServer.AcceptClient] : Generating Exception Log");
+                Program.ErrorLog.Write("NOTICE: An Error occured at [ServerListRetrieveSocket.ProcessAccept] : Generating Exception Log");
                 ExceptionHandler.GenerateExceptionLog(e);
             }
         }
@@ -121,7 +121,7 @@ namespace BattlelogMaster
             }
             catch (Exception e)
             {
-                Program.ErrorLog.Write("An Error occured at [MasterServer.OnDisconnect] : Generating Exception Log");
+                Program.ErrorLog.Write("An Error occured at [ServerListRetrieveSocket.MasterClient_OnDisconnect] : Generating Exception Log");
                 ExceptionHandler.GenerateExceptionLog(e);
             }
         }
