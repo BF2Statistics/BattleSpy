@@ -10,6 +10,12 @@ namespace BattlelogMaster
     public class GameServer
     {
         [NonFilter]
+        public int DatabaseId { get; set; }
+
+        [NonFilter]
+        public bool DatabaseIdAttempted = false;
+
+        [NonFilter]
         public IPEndPoint AddressInfo { get; protected set; }
 
         [NonFilter]

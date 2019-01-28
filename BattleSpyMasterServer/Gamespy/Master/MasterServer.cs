@@ -273,12 +273,12 @@ namespace BattlelogMaster
             {
                 using (MasterDatabase Driver = new MasterDatabase())
                 {
-                    Driver.AddOrUpdateServer(server);
+                    Driver.UpdateServerOnline(server);
                 }
             }
             catch(Exception e)
             {
-                Program.ErrorLog.Write("ERROR: [MasterDatabase.AddOrUpdateServer] " + e.Message);
+                Program.ErrorLog.Write("ERROR: [MasterDatabase.UpdateServerOnline] " + e.Message);
             }
         }
 
@@ -461,6 +461,7 @@ namespace BattlelogMaster
         {
             // Create a list of servers to update in the database
             List<GameServer> ServersToRemove = new List<GameServer>();
+            var span = TimeSpan.FromSeconds(ServerTTL);
 
             // Remove servers that havent talked to us in awhile from the server list
             foreach (string key in Servers.Keys)
@@ -468,7 +469,7 @@ namespace BattlelogMaster
                 GameServer value;
                 if (Servers.TryGetValue(key, out value))
                 {
-                    if (value.LastPing < DateTime.Now - TimeSpan.FromSeconds(ServerTTL))
+                    if (value.LastPing < DateTime.Now - span)
                     {
                         if (Debugging) DebugLog.Write("Removing Server for Expired Ping: " + key);
                         if (Servers.TryRemove(key, out value))
@@ -506,7 +507,7 @@ namespace BattlelogMaster
             }
             catch(Exception e)
             {
-                Program.ErrorLog.Write("ERROR: [MasterDatabase.UpdateServerStatus] Unable to update servers status: " + e.Message);
+                Program.ErrorLog.Write("ERROR: [MasterDatabase.UpdateServerOffline] Unable to update servers status: " + e.Message);
             }
         }
 

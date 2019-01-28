@@ -48,60 +48,47 @@ namespace BattlelogMaster
                 base.Dispose();
         }
 
-        public void AddOrUpdateServer(GameServer server)
+        /// <summary>
+        /// Sets a server's online status in the database
+        /// </summary>
+        /// <param name="server"></param>
+        public void UpdateServerOnline(GameServer server)
         {
-            // Check if server exists in database
-            if (base.ExecuteScalar<int>(
-                "SELECT COUNT(*) FROM server WHERE ip=@P0 AND queryport=@P1", 
-                server.AddressInfo.Address, 
-                server.QueryPort) > 0)
+            // Fetch server ID if we have not already
+            if (!server.DatabaseIdAttempted)
+            {
+                string query = "SELECT COALESCE(id, 0), COUNT(id) FROM server WHERE ip=@P0 AND queryport=@P1";
+                server.DatabaseId = base.ExecuteScalar<int>(query, server.AddressInfo.Address, server.QueryPort);
+                server.DatabaseIdAttempted = true;
+            }
+
+            // Update server status in database only if it already exists!
+            if (server.DatabaseId > 0)
             {
                 // Update
                 base.Execute(
-                    "UPDATE server SET online=1, gameport=@P1, `name`=@P3, lastupdate=@P4 WHERE ip=@P0 AND queryport=@P2",
-                    server.AddressInfo.Address,
+                    "UPDATE server SET online=1, gameport=@P0, `name`=@P1, lastseen=@P2 WHERE id=@P3",
                     server.hostport,
-                    server.QueryPort,
-                    server.hostname,
-                    server.LastRefreshed.ToUnixTimestamp()
+                    server.hostname.Truncate(100),
+                    server.LastRefreshed.ToUnixTimestamp(),
+                    server.DatabaseId
                 );
             }
-            /*
-             * We are NOT adding new servers with the new AuthToken system in place!
-             * 
-            else
-            {
-                // Add
-                base.Execute(
-                    "INSERT INTO server(`name`, `ip`, `port`, `queryport`, `lastupdate`, `authorized`, `online`) VALUES (@P0, @P1, @P2, @P3, @P4, 0, 1)",
-                    server.hostname,
-                    server.AddressInfo.Address,
-                    server.hostport,
-                    server.QueryPort,
-                    server.LastRefreshed.ToUnixTimestamp()
-                );
-            }
-            */
         }
 
+        /// <summary>
+        /// Sets a server's online status in the database
+        /// </summary>
+        /// <param name="server"></param>
         public void UpdateServerOffline(GameServer server)
         {
             // Check if server exists in database
-            if (base.ExecuteScalar<int>(
-                "SELECT COUNT(*) FROM server WHERE ip=@P0 AND queryport=@P1",
-                server.AddressInfo.Address,
-                server.QueryPort) == 0)
+            if (server.DatabaseId > 0)
             {
-                return;
+                // Update
+                string query = "UPDATE server SET online=0, lastseen=@P0 WHERE id=@P1";
+                base.Execute(query, server.LastRefreshed.ToUnixTimestamp(), server.DatabaseId);
             }
-
-            // Update
-            base.Execute(
-                "UPDATE server SET online=0, lastupdate=@P2 WHERE ip=@P0 AND queryport=@P1",
-                server.AddressInfo.Address,
-                server.QueryPort,
-                server.LastRefreshed.ToUnixTimestamp()
-            );
         }
     }
 }
